@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# SPDX-License-Identifier: Apache-2.0
+
 import collections
 from io import StringIO
 from itertools import dropwhile, takewhile

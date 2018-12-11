@@ -2,6 +2,7 @@
 
 # Copyright 2018 Open Source Foundries, Limited
 # Copyright 2018 Foundries.io, Limited
+# SPDX-License-Identifier: Apache-2.0
 
 '''Zephyr "what's new"? script.
 
