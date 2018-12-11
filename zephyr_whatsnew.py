@@ -33,8 +33,7 @@ import pygit2
 import editdistance
 
 from pygit2_helpers import shortlog_is_revert, shortlog_reverts_what, \
-    shortlog_no_sauce, commit_shortsha, commit_shortlog, \
-    commit_is_fio
+    shortlog_no_sauce, commit_shortsha, commit_shortlog
 
 # This list maps the 'area' a commit affects to a list of
 # shortlog prefixes (the content before the first ':') in the Zephyr
@@ -307,11 +306,14 @@ class ZephyrRepoAnalyzer:
                 fio_outstanding[sl] = c
 
         # Compute likely merged patches.
-        upstream_fio = [c for c in upstream_new if commit_is_fio(c)]
+        upstream_fio = [c for c in upstream_new if
+                        c.author.email.endswith(('@opensourcefoundries.com',
+                                                 '@foundries.io'))]
         likely_merged = OrderedDict()
         for fio_sl, fio_c in fio_outstanding.items():
             def ed(upstream_commit):
-                return editdistance.eval(shortlog_no_sauce(fio_sl),
+                return editdistance.eval(shortlog_no_sauce(fio_sl,
+                                                           ('[OSF', '[FIO')),
                                          commit_shortlog(upstream_commit))
             matches = [c for c in upstream_fio if
                        ed(c) < self.edit_dist_threshold]

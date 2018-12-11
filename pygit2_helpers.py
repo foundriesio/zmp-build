@@ -56,20 +56,29 @@ def shortlog_reverts_what(shortlog):
     return shortlog[len(revert) + 1:-1]
 
 
-def shortlog_no_sauce(shortlog):
+def shortlog_no_sauce(shortlog, sauce):
     '''Return a Git shortlog without a 'sauce tag'.
 
-    :param shortlog: Git commit message shortlog
+    :param shortlog: Git commit message shortlog, which might begin
+                     with a "sauce tag" that looks like '[sauce <tag>] '
+    :param sauce: String (or iterable of strings) indicating a source of
+                  "sauce". This is organization-specific.
 
-    If the shortlog starts with "[OSF" or "[FIO", returns
-    the contents of the shortlog after the first ']'.
+    For example, sauce="xyz" and the shortlog is:
 
-    Otherwise, returns the shortlog unaltered.
+    "[xyz fromlist] area: something"
 
-    For example, "[FIO toup] area: something" returns "area: something".
-    As another example, "foo: bar" returns "foo: bar".
+    Then the return value is "area: something".
+
+    As another example with the same sauce, if shortlog is "foo: bar",
+    the return value is "foo: bar".
     '''
-    if shortlog.startswith(('[OSF', '[FIO')):
+    if isinstance(sauce, str):
+        sauce = '[' + sauce
+    else:
+        sauce = tuple('[' + s for s in sauce)
+
+    if shortlog.startswith(sauce):
         return shortlog[shortlog.find(']')+1:].strip()
     else:
         return shortlog
@@ -104,11 +113,3 @@ def commit_shortlog(commit):
 
     :param commit: pygit2 commit object'''
     return commit.message.splitlines()[0]
-
-
-def commit_is_fio(commit):
-    '''Returns True iff the commit is from an OSF/foundries.io email.
-
-    :param commit: pygit2 commit object'''
-    email = commit.author.email
-    return email.endswith(('@opensourcefoundries.com', '@foundries.io'))
