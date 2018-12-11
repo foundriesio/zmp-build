@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # Copyright 2018 Open Source Foundries, Limited
 # Copyright 2018 Foundries.io, Limited
 # SPDX-License-Identifier: Apache-2.0
@@ -7,10 +9,16 @@
 Has some features that are only useful when analyzing a tree with
 upstream and downstream commits as well.'''
 
+import argparse
 from collections import defaultdict, OrderedDict, namedtuple
+import configparser
+import logging
+import json
+import os
 import re
 import sys
 from subprocess import check_output
+import textwrap
 
 import pygit2
 import editdistance
@@ -107,6 +115,16 @@ class UnknownCommitsError(RuntimeError):
     The exception arguments are an iterable of commits whose area
     was unknown.
     '''
+    pass
+
+
+class NoSuchDownstream(RuntimeError):
+    '''Downstream ref is invalid.'''
+    pass
+
+
+class NoSuchUpstream(RuntimeError):
+    '''Upstream ref is invalid.'''
     pass
 
 
@@ -280,9 +298,9 @@ class ZephyrRepoAnalyzer:
                 # from outstanding.
                 what = shortlog_reverts_what(sl)
                 if what not in downstream_outstanding:
-                    print('WARNING: {} was reverted,'.format(what),
-                          "but isn't present in downstream history",
-                          file=sys.stderr)
+                    logging.warning(
+                        "%s was reverted, but isn't in downstream history",
+                        what)
                     continue
                 del downstream_outstanding[what]
             else:
@@ -324,8 +342,14 @@ class ZephyrRepoAnalyzer:
     def _new_upstream_only_commits(self):
         '''Commits in `upstream_ref` history since merge base with
         `downstream_ref`'''
-        downstream_oid = self.repo.revparse_single(self.downstream_ref).oid
-        upstream_oid = self.repo.revparse_single(self.upstream_ref).oid
+        try:
+            downstream_oid = self.repo.revparse_single(self.downstream_ref).oid
+        except KeyError:
+            raise NoSuchDownstream(self.downstream_ref)
+        try:
+            upstream_oid = self.repo.revparse_single(self.upstream_ref).oid
+        except KeyError:
+            raise NoSuchUpstream(self.upstream_ref)
 
         merge_base = self.repo.merge_base(downstream_oid, upstream_oid)
 
@@ -362,3 +386,340 @@ class ZephyrRepoAnalyzer:
             ret.append(commit)
 
         return ret
+
+
+#
+# For running the module as a script.
+#
+
+# Command line options.
+_VALUE_OPTIONS = ['downstream-email', 'downstream-sauce', 'downstream-ref',
+                  'upstream-ref', 'format']
+_Y_N_OPTIONS = ['loot', 'to-revert']
+_OPTIONS = _VALUE_OPTIONS + _Y_N_OPTIONS
+
+# Choices for the --format option.
+_FORMATS = ['text', 'json', 'pretty-json']
+
+# Default configuration file
+_DEFAULT_CONFIG_FILE = '~/.config/zephyr_helpers.config'
+# Configuration file keys whose values are comma-separated lists.
+_CONFIG_LIST_OPTIONS = ['downstream-email', 'downstream-sauce']
+
+# Defaults for options except the config file. These are used to
+# populate the remaining arguments after we've taken them from the
+# command line and any config files we find.
+_DEFAULTS = {
+    # Not all options have defaults. If we need one and neither the
+    # config file nor the arguments specify it, error out.
+    'downstream-ref': 'origin/master',
+    'upstream-ref': 'upstream/master',
+    'format': _FORMATS[0],
+    'loot': True,
+    'to-revert': True,
+    }
+
+
+def _dest(opt):
+    return opt.replace('-', '_')
+
+
+def _y_or_n_bool(arg):
+    argl = arg.lower()
+    if argl in ['y', 'yes']:
+        return True
+    elif argl in ['n', 'no']:
+        return False
+    else:
+        raise argparse.ArgumentTypeError('{} is not "y" or "n"'.
+                                         format(arg))
+
+
+def load_config(to_try):
+    parser = configparser.ConfigParser()
+    for path in to_try:
+        parser.read(path)  # This doesn't error out if it doesn't exist.
+
+    try:
+        config = parser['zephyr_helpers']
+    except KeyError:
+        return None
+
+    ret = {k: config[k] for k in _VALUE_OPTIONS if k in config}
+
+    for opt in _Y_N_OPTIONS:
+        if opt not in config:
+            continue
+
+        try:
+            val = _y_or_n_bool(config[opt])
+        except argparse.ArgumentTypeError:
+            logging.warning(
+                'ignoring config file option {} value {}; should be y or n'.
+                format(opt, config[0]))
+            continue
+
+        ret[opt] = val
+
+    return ret
+
+
+def _update_args_with_configs(args):
+    default_config_file = os.path.expanduser(_DEFAULT_CONFIG_FILE)
+    config = load_config([default_config_file] + args.config_file)
+
+    if config is None:
+        logging.debug('no valid config files found')
+        return
+
+    for opt in _OPTIONS:
+        dest = _dest(opt)
+
+        if getattr(args, dest) is not None or opt not in config:
+            continue
+
+        val = config[opt]
+        if opt in _CONFIG_LIST_OPTIONS:
+            val = [v.strip() for v in val.split(',')]
+        setattr(args, dest, val)
+        logging.debug('{}={}'.format(dest, val))
+
+
+def _update_args_with_defaults(args):
+    for opt in _OPTIONS:
+        dest = _dest(opt)
+
+        if getattr(args, dest) is not None or opt not in _DEFAULTS:
+            continue
+
+        setattr(args, dest, _DEFAULTS[opt])
+        logging.debug('{}={}'.format(dest, _DEFAULTS[opt]))
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent('''\
+        Zephyr helper command line interface.
+
+        Allows analyzing a Zephyr repository and printing information
+        about it. It's assumed that the repository is a local clone
+        of a downstream Zephyr repository.'''),
+        epilog=textwrap.dedent('''\
+        Configuration
+        -------------
+
+        This script can also be given a configuration file. (The
+        default location is ~/.config/zephyr_helpers.config.)
+
+        The contents are a configparser-style file, which looks like
+        this:
+
+            [zephyr_helpers]
+            some-option-no-leading-dashes = value
+
+        For example:
+
+            [zephyr_helpers]
+            downstream-email = @your-domain.com
+            downstream-sauce = your-sauce
+            to-revert = n
+
+        Values which can be given multiple times can be specified in
+        the configuration file with commas as separators.
+
+        Any options given on the command line override values taken
+        from configuration file(s).
+
+        Required Values
+        ---------------
+
+        The 'downstream-email' and 'downstream-sauce' values are
+        required, and must be given using command line options or set
+        in a configuration file.'''))
+
+    #
+    # IMPORTANT:
+    #
+    # If you add or remove options, keep _OPTIONS,
+    # as well as zephyr_helpers.config.template, in sync!
+    #
+
+    group = parser.add_argument_group(
+        'command-line only options (no config file equivalent):')
+    group.add_argument('-c', '--config-file', action='append', default=[],
+                       help='config file path, in .ini format; see below')
+    group.add_argument('-v', '--verbose', action='store_true',
+                       help='enable verbose debug logs (to stderr)')
+
+    group = parser.add_argument_group('out of tree organization options')
+    group.add_argument('-d', '--downstream-email', action='append',
+                       help='''downstream email domain (e.g. @example.com)
+                       to use when searching for upstream commits authored
+                       by downstream organization members; may be given more
+                       than once. case sensitive!''')
+    group.add_argument('-s', '--downstream-sauce', action='append',
+                       help='''downstream sauce string to use when
+                       searching for to-revert commits; e.g. if your
+                       sauce tags look like [xyz <tag>], use "xyz".
+                       may be given more than once. doesn't affect
+                       search for out of tree patches. case sensitive!''')
+
+    group = parser.add_argument_group('repository configuration')
+    group.add_argument('--dr', '--downstream-ref',
+                       dest='downstream_ref',
+                       help='''downstream git revision (commit-ish) to
+                       analyze upstream differences with; default: {}'''.
+                       format(_DEFAULTS['downstream-ref']))
+    group.add_argument('--ur', '--upstream-ref',
+                       dest='upstream_ref',
+                       help='''upstream git revision (commit-ish) to
+                       analyze downstream against; default: {}.'''.
+                       format(_DEFAULTS['upstream-ref']))
+
+    group = parser.add_argument_group('output configuration')
+    group.add_argument('--loot', type=_y_or_n_bool,
+                       help='''if y (the default), print "loot" (a list of
+                       outstanding out of tree patches); set to n to
+                       disable''')
+    group.add_argument('--to-revert', type=_y_or_n_bool,
+                       help='''if y (the default), print out of tree patches
+                       "to revert" before the next mergeup, i.e. upstream
+                       patches from a downstream email domain whose shortlogs
+                       are a short edit distance from a "loot" patch.''')
+    group.add_argument('--format', choices=_FORMATS,
+                       help='output format; default: {}'.
+                       format(_DEFAULTS['format']))
+
+    parser.add_argument('repo', metavar='ZEPHYR', nargs='?',
+                        help='''path to the zephyr repository; default:
+                        current working directory.''')
+
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=(logging.DEBUG if args.verbose
+                               else logging.WARNING),
+                        format='[%(levelname)s] [%(funcName)s] %(message)s')
+
+    for opt in _OPTIONS:
+        dest = _dest(opt)
+        if not hasattr(args, dest) or getattr(args, dest) is None:
+            continue
+        logging.debug('{}={}'.format(dest, getattr(args, dest)))
+
+    _update_args_with_configs(args)
+    _update_args_with_defaults(args)
+
+    if args.downstream_email is None:
+        print('error:'
+              '--downstream-email not given and not set in a config file',
+              file=sys.stderr)
+        parser.print_usage()
+        sys.exit(1)
+    if args.downstream_sauce is None:
+        print('error:',
+              '--downstream-sauce not given and not set in a config file',
+              file=sys.stderr)
+        parser.print_usage()
+        sys.exit(1)
+
+    return parser, args
+
+
+def main():
+    def unknown_area(ignored_area_prefix):
+        return 'UNKNOWN'
+
+    parser, args = parse_args(sys.argv[1:])
+
+    repo_path = args.repo
+    if repo_path is None:
+        repo_path = os.getcwd()
+
+    analyzer = ZephyrRepoAnalyzer(
+        repo_path, args.downstream_ref, tuple(args.downstream_sauce),
+        tuple(args.downstream_email), args.upstream_ref,
+        area_by_shortlog=unknown_area)
+
+    try:
+        analysis = analyzer.analyze()
+    except NoSuchDownstream:
+        print('error: invalid downstream-ref: {}'.format(args.downstream_ref),
+              file=sys.stderr)
+        print('check command line arguments, repository, and config file(s).',
+              file=sys.stderr)
+        parser.print_usage()
+        sys.exit(1)
+    except NoSuchUpstream:
+        print('error: invalid upstream-ref: {}'.format(args.upstream_ref),
+              file=sys.stderr)
+        print('check command line arguments, repository, and config file(s).',
+              file=sys.stderr)
+        parser.print_usage()
+        sys.exit(1)
+
+    outstanding = analysis.downstream_outstanding_patches
+    likely_merged = analysis.downstream_merged_patches
+
+    def print_loot_text():
+        print('LOOT:')
+        if outstanding:
+            for sl, c in outstanding.items():
+                print('{} {}'.format(c.oid, sl))
+        else:
+            print('<none>')
+
+    def print_to_revert_text():
+        print('To revert:')
+        if likely_merged:
+            for sl, commits in likely_merged.items():
+                downstream_oid = outstanding[sl].oid
+                print('{} {}'.format(downstream_oid, sl))
+                if len(commits) > 1:
+                    print('\tlikely merged upstream as one of:')
+                    for c in commits:
+                        print('\t{} {}'.format(c.oid, commit_shortlog(c)))
+                else:
+                    print('\tlikely merged upstream as:')
+                    print('\t{} {}'.format(commits[0].oid,
+                                           commit_shortlog(commits[0])))
+        else:
+            print('<none>')
+
+    def loot_json_obj():
+        # It's important that this is a list, to preserve order when
+        # "rebasing" and when going through json.dumps().
+        return [{'sha': str(c.oid), 'shortlog': sl}
+                for sl, c in outstanding.items()]
+
+    def to_revert_json_obj():
+        # List ordering isn't that important here, but let's be consistent.
+        ret = []
+        for sl, commits in likely_merged.items():
+            ret.append({'downstream': {'sha': str(outstanding[sl].oid),
+                                       'shortlog': sl},
+                        'upstream-matches': [{'sha': str(c.oid),
+                                              'shortlog': commit_shortlog(c)}
+                                             for c in commits]})
+        return ret
+
+    if args.format == 'text':
+        if args.loot:
+            print_loot_text()
+        if args.to_revert:
+            if args.loot:
+                print()         # make some vertical space
+            print_to_revert_text()
+    elif args.format in ('json', 'pretty-json'):
+        to_dump = {}
+        if args.loot:
+            to_dump['loot'] = loot_json_obj()
+        if args.to_revert:
+            to_dump['to-revert'] = to_revert_json_obj()
+
+        indent = None if args.format == 'json' else 4
+        print(json.dumps(to_dump, indent=indent))
+
+
+if __name__ == '__main__':
+    main()

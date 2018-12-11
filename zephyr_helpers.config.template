@@ -1,0 +1,40 @@
+# An example config file for zephyr_helpers.py's command line interface
+# Copy it to zephyr_helpers.config and edit it to your needs.
+#
+# If you put it in ~/.config/zephyr_helpers.config, it will get picked
+# up automatically.
+
+
+[zephyr_helpers]
+
+# The email domain for commits by authors from the "downstream" repository.
+# Separate multiple domains with commas (whitespace is ignored).
+downstream-email = @your-company.com
+# The sauce identifier for your downstream. If your sauce tags look like:
+#
+# [xyz <tag>]
+#
+# Then use "xyz" here. Separate multiple values with commas.
+downstream-sauce = your-sauce
+# The revision name of the downstream ref (commit-ish) you want to analyze.
+# Usually this is either "your-remote/master" or "master".
+downstream-ref = your-remote/master
+
+# The upstream ref you want to analyze. This is usually upstream/master.
+upstream-ref = upstream/master
+
+# Uncomment to disable printing loot (a list of out of tree patches):
+#
+# loot = n
+
+# Uncomment to disable printing loot that should likely get
+# reverted in the next mergeup (because a commit with a similar
+# shortlog has been committed upstream from someone with a
+# "downstream-email" address since your last mergeup):
+#
+# to-revert = n
+
+# Uncomment to print in json (you can also use 'pretty-json' for
+# indented output):
+#
+# format = json
