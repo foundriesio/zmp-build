@@ -832,7 +832,8 @@ def _self_test():
          'test that _k_neg_eagain is in rodata'),
         ('Testing', 'unittest: Support EXTRA_*_FLAGS'),
         ('Testing', 'testing: add option to generate coverage reports'),
-        ('Testing', 'tracing: don\'t include kernel_structs.h from tracing_sysview.h'),
+        ('Testing',
+         'tracing: don\'t include kernel_structs.h from tracing_sysview.h'),
 
         # Cases we explicitly do not want to match, and why:
 
