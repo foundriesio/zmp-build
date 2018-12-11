@@ -170,12 +170,14 @@ def commit_area(commit):
 # - upstream_area_patches: map from areas to chronological (most
 #   recent first) list of new upstream patches
 #
-# - downstream_outstanding_patches: chronological list of downstream patches
-#   haven't been reverted yet.
+# - downstream_outstanding_patches: a map from shortlogs of non-mergeup
+#   downstream out of tree commits that haven't been reverted yet to their
+#   pygit2 commit objects
 #
 # - downstream_merged_patches: "likely merged" downstream patches; a map from
 #   shortlogs of unreverted downstream patches to lists of new upstream
-#   patches sent by downstream contributors that have similar shortlogs.
+#   patches (pygit2 commit objects) sent by downstream contributors that have
+#   similar shortlogs.
 ZephyrRepoAnalysis = namedtuple('ZephyrRepoAnalysis',
                                 ['upstream_area_counts',
                                  'upstream_area_patches',
