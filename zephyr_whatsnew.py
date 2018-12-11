@@ -8,10 +8,10 @@
 
 This is a helper script for understanding what's happened in Zephyr
 since a particular point in time. It looks at changes in an "upstream"
-Zephyr tree that are not present in a Foundries.io tree, and outputs
+Zephyr tree that are not present in a "downstream" tree, and outputs
 information on the differences between them.
 
-This information is useful for general understanding, for creating Foundries.io
+This information is useful for general understanding, for creating
 mergeup commit messages, etc.
 '''
 
@@ -186,35 +186,36 @@ def commit_area(commit):
     return shortlog_area(commit_shortlog(commit))
 
 
-# ZephyrRepoAnalysis: represents results of analyzing Zephyr and Foundries.io
+# ZephyrRepoAnalysis: represents results of analyzing upstream and downstream
 # activity in a repository from given starting points. See
 # ZephyrRepoAnalyzer.
 #
 # - upstream_area_counts: map from areas to total number of
-#   new upstream patches (new means not reachable from `fio_ref`)
+#   new upstream patches (new means not reachable from `downstream_ref`)
 #
 # - upstream_area_patches: map from areas to chronological (most
 #   recent first) list of new upstream patches
 #
-# - fio_outstanding_patches: chronological list of Foundries.io patches that
-#   don't appear to have been reverted yet.
+# - downstream_outstanding_patches: chronological list of downstream patches
+#   haven't been reverted yet.
 #
-# - fio_merged_patches: "likely merged" Foundries.io patches; a map from
-#   shortlogs of unreverted F.io patches to lists of new upstream
-#   patches sent by F.io contributors that have similar shortlogs.
+# - downstream_merged_patches: "likely merged" downstream patches; a map from
+#   shortlogs of unreverted downstream patches to lists of new upstream
+#   patches sent by downstream contributors that have similar shortlogs.
 ZephyrRepoAnalysis = namedtuple('ZephyrRepoAnalysis',
                                 ['upstream_area_counts',
                                  'upstream_area_patches',
                                  'upstream_commit_range',
-                                 'fio_outstanding_patches',
-                                 'fio_merged_patches'])
+                                 'downstream_outstanding_patches',
+                                 'downstream_merged_patches'])
 
 
 class ZephyrRepoAnalyzer:
     '''Utility class for analyzing a Zephyr repository.'''
 
-    def __init__(self, repo_path, fio_ref, upstream_ref, sha_to_area=None,
-                 area_by_shortlog=None, edit_dist_threshold=3):
+    def __init__(self, repo_path, downstream_ref, upstream_ref,
+                 sha_to_area=None, area_by_shortlog=None,
+                 edit_dist_threshold=3):
         if sha_to_area is None:
             sha_to_area = {}
 
@@ -227,14 +228,15 @@ class ZephyrRepoAnalyzer:
         self.repo_path = repo_path
         '''path to Zephyr repository being analyzed'''
 
-        self.fio_ref = fio_ref
-        '''ref (commit-ish) for foundries.io commit to start analysis from'''
+        self.downstream_ref = downstream_ref
+        '''ref (commit-ish) for downstream commit to start analysis from'''
 
         self.upstream_ref = upstream_ref
         '''ref (commit-ish) for upstream ref to start analysis from'''
 
         self.edit_dist_threshold = edit_dist_threshold
-        '''commit shortlog edit distance to match up foundries.io patches'''
+        '''commit shortlog edit distance to use when fuzzy-matching
+        upstream and downstream patches'''
 
     def analyze(self):
         '''Analyze repository history.
@@ -269,11 +271,11 @@ class ZephyrRepoAnalyzer:
             upstream_area_counts[area] = len(patches)
 
         #
-        # Analyze FIO portion of the tree.
+        # Analyze downstream portion of the tree.
         #
-        fio_only = self._all_fio_only_commits()
-        fio_outstanding = OrderedDict()
-        for c in fio_only:
+        downstream_only = self._all_downstream_only_commits()
+        downstream_outstanding = OrderedDict()
+        for c in downstream_only:
             if len(c.parents) > 1:
                 # Skip all the mergeup commits.
                 continue
@@ -284,15 +286,15 @@ class ZephyrRepoAnalyzer:
                 # If a shortlog marks a revert, delete the original commit
                 # from outstanding.
                 what = shortlog_reverts_what(sl)
-                if what not in fio_outstanding:
+                if what not in downstream_outstanding:
                     print('WARNING: {} was reverted,'.format(what),
-                          "but isn't present in FIO history",
+                          "but isn't present in downstream history",
                           file=sys.stderr)
                     continue
-                del fio_outstanding[what]
+                del downstream_outstanding[what]
             else:
                 # Non-revert commits just get appended onto
-                # fio_outstanding, keyed by shortlog to make finding
+                # downstream_outstanding, keyed by shortlog to make finding
                 # them later in case they're reverted easier.
                 #
                 # We could try to support this by looking into the entire
@@ -300,38 +302,40 @@ class ZephyrRepoAnalyzer:
                 # text and computing reverts based on oid rather than
                 # shortlog. That'd be more robust, but let's not worry
                 # about it for now.
-                if sl in fio_outstanding:
+                if sl in downstream_outstanding:
                     msg = 'duplicated commit shortlogs ({})'.format(sl)
                     raise NotImplementedError(msg)
-                fio_outstanding[sl] = c
+                downstream_outstanding[sl] = c
 
         # Compute likely merged patches.
-        upstream_fio = [c for c in upstream_new if
-                        c.author.email.endswith(('@opensourcefoundries.com',
-                                                 '@foundries.io'))]
+        upstream_downstream = [c for c in upstream_new if
+                               c.author.email.endswith(
+                                   ('@opensourcefoundries.com',
+                                    '@foundries.io'))]
         likely_merged = OrderedDict()
-        for fio_sl, fio_c in fio_outstanding.items():
+        for downstream_sl, downstream_c in downstream_outstanding.items():
             def ed(upstream_commit):
-                return editdistance.eval(shortlog_no_sauce(fio_sl,
+                return editdistance.eval(shortlog_no_sauce(downstream_sl,
                                                            ('[OSF', '[FIO')),
                                          commit_shortlog(upstream_commit))
-            matches = [c for c in upstream_fio if
+            matches = [c for c in upstream_downstream if
                        ed(c) < self.edit_dist_threshold]
             if len(matches) != 0:
-                likely_merged[fio_sl] = matches
+                likely_merged[downstream_sl] = matches
 
         return ZephyrRepoAnalysis(upstream_area_counts,
                                   upstream_area_patches,
                                   upstream_commit_range,
-                                  fio_outstanding,
+                                  downstream_outstanding,
                                   likely_merged)
 
     def _new_upstream_only_commits(self):
-        '''Commits in `upstream_ref` history since merge base with `fio_ref`'''
-        fio_oid = self.repo.revparse_single(self.fio_ref).oid
+        '''Commits in `upstream_ref` history since merge base with
+        `downstream_ref`'''
+        downstream_oid = self.repo.revparse_single(self.downstream_ref).oid
         upstream_oid = self.repo.revparse_single(self.upstream_ref).oid
 
-        merge_base = self.repo.merge_base(fio_oid, upstream_oid)
+        merge_base = self.repo.merge_base(downstream_oid, upstream_oid)
 
         sort = pygit2.GIT_SORT_TOPOLOGICAL | pygit2.GIT_SORT_REVERSE
         walker = self.repo.walk(upstream_oid, sort)
@@ -349,13 +353,13 @@ class ZephyrRepoAnalyzer:
             return self.area_by_shortlog(spfx)
         return None
 
-    def _all_fio_only_commits(self):
-        '''Commits reachable from `fio_ref`, but not `upstream_ref`'''
+    def _all_downstream_only_commits(self):
+        '''Commits reachable from `downstream_ref`, but not `upstream_ref`'''
         # Note: pygit2 doesn't seem to have any ready-made rev-list
         # equivalent, so call out to git directly to get the commit SHAs,
         # then wrap them with pygit2 objects.
         cmd = ['git', 'rev-list', '--pretty=oneline', '--reverse',
-               self.fio_ref, '^{}'.format(self.upstream_ref)]
+               self.downstream_ref, '^{}'.format(self.upstream_ref)]
         output_raw = check_output(cmd, cwd=self.repo_path)
         output = output_raw.decode(sys.getdefaultencoding()).splitlines()
 
@@ -510,8 +514,8 @@ class ZephyrTextFormatMixin:
 class ZephyrMergeupFormatter(ZephyrTextFormatMixin, ZephyrOutputFormatter):
     '''Mergeup commit message format, plain text.
 
-    This includes a summary of foundries.io outstanding patches, and may
-    print warnings if there are likely reverted foundries.io commits'''
+    This includes a summary of outstanding downstream patches, and may
+    print warnings if there are likely reverted downstream commits'''
 
     @classmethod
     def names(cls):
@@ -524,8 +528,8 @@ class ZephyrMergeupFormatter(ZephyrTextFormatMixin, ZephyrOutputFormatter):
             ]
 
     def postamble(self, analysis, context):
-        outstanding = analysis.fio_outstanding_patches
-        likely_merged = analysis.fio_merged_patches
+        outstanding = analysis.downstream_outstanding_patches
+        likely_merged = analysis.downstream_merged_patches
         ret = []
 
         def addl(line, comment=False):
@@ -537,8 +541,8 @@ class ZephyrMergeupFormatter(ZephyrTextFormatMixin, ZephyrOutputFormatter):
             else:
                 ret.append(line)
 
-        addl('Outstanding Foundries.io patches')
-        addl('================================')
+        addl('Outstanding Downstream patches')
+        addl('==============================')
         addl('')
         for sl, c in outstanding.items():
             addl('- {} {}'.format(commit_shortsha(c), sl))
@@ -547,7 +551,7 @@ class ZephyrMergeupFormatter(ZephyrTextFormatMixin, ZephyrOutputFormatter):
         if not likely_merged:
             return ret
 
-        addl('Likely merged Foundries.io patches:', True)
+        addl('Likely merged downstream patches:', True)
         addl('IMPORTANT: You probably need to revert these and re-run!', True)
         addl('           Make sure to check the above as well; these are',
              True)
@@ -567,7 +571,7 @@ class ZephyrMergeupFormatter(ZephyrTextFormatMixin, ZephyrOutputFormatter):
 class ZephyrNewsletterFormatter(ZephyrTextFormatMixin, ZephyrOutputFormatter):
     '''Newsletter Markdown format, for blog posts.
 
-    This doesn't include a summary of outstanding foundries.io commits.'''
+    This doesn't include a summary of outstanding downstream commits.'''
 
     @classmethod
     def names(cls):
@@ -656,7 +660,8 @@ def main(args):
     if repo_path is None:
         repo_path = os.getcwd()
 
-    analyzer = ZephyrRepoAnalyzer(repo_path, args.fio_ref, args.upstream_ref,
+    analyzer = ZephyrRepoAnalyzer(repo_path, args.downstream_ref,
+                                  args.upstream_ref,
                                   sha_to_area=args.sha_to_area,
                                   area_by_shortlog=args.area_by_shortlog)
     try:
@@ -860,13 +865,15 @@ if __name__ == '__main__':
                                      script. This script currently just
                                      prints the mergeup commit message.''')
     group = parser.add_argument_group('repository options')
-    group.add_argument('--fio-ref', default='osf-dev/master',
-                       help='''foundries.io ref (commit-ish) to analyze
+    group.add_argument('--downstream-ref', default='osf-dev/master',
+                       help='''downstream git revision (commit-ish) to analyze
                        upstream differences with. Default is osf-dev/master
                        [sic; this is a legacy from the OSF days].''')
+    group.add_argument('--fio-ref', dest='downstream_ref',
+                       help=argparse.SUPPRESS)  # For backwards compatibility
     group.add_argument('--upstream-ref', default='upstream/master',
                        help='''Upstream ref (commit-ish) whose differences
-                       with fio-ref to analyze. Default is
+                       with --downstream-ref to analyze. Default is
                        upstream/master.''')
     group.add_argument('-A', '--set-area', default=[], action='append',
                        help='''Format is sha:Area; associates an area with
