@@ -24,7 +24,7 @@ import pygit2
 import editdistance
 
 from pygit2_helpers import shortlog_is_revert, shortlog_reverts_what, \
-    shortlog_no_sauce, commit_shortlog
+    shortlog_has_sauce, shortlog_no_sauce, commit_shortlog
 
 
 # This list maps the 'area' a commit affects to a list of
@@ -316,6 +316,15 @@ class ZephyrRepoAnalyzer:
                 if sl in downstream_outstanding:
                     msg = 'duplicated commit shortlogs ({})'.format(sl)
                     raise NotImplementedError(msg)
+
+                # Emit a warning if we have a non-revert patch with an
+                # incorrect sauce tag. (Downstream might carry reverts
+                # of upstream patches as hotfixes, which we shouldn't
+                # warn about.)
+                if not shortlog_has_sauce(sl, self.downstream_sauce):
+                    logging.warning('out of tree patch has bad sauce: %s %s',
+                                    c.oid, sl)
+
                 downstream_outstanding[sl] = c
 
         # Compute likely merged patches.

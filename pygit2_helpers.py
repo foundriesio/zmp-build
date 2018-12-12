@@ -56,6 +56,33 @@ def shortlog_reverts_what(shortlog):
     return shortlog[len(revert) + 1:-1]
 
 
+def shortlog_has_sauce(shortlog, sauce):
+    '''Check if a Git shortlog has a 'sauce tag'.
+
+    :param shortlog: Git commit message shortlog, which might begin
+                     with a "sauce tag" that looks like '[sauce <tag>] '
+    :param sauce: String (or iterable of strings) indicating a source of
+                  "sauce". This is organization-specific.
+
+    For example, sauce="xyz" and the shortlog is:
+
+    [xyz fromlist] area: something
+
+    Then the return value is True. If the shortlog is any of these,
+    the return value is False:
+
+    area: something
+    [abc fromlist] area: something
+    [WIP] area: something
+    '''
+    if isinstance(sauce, str):
+        sauce = '[' + sauce
+    else:
+        sauce = tuple('[' + s for s in sauce)
+
+    return shortlog.startswith(sauce)
+
+
 def shortlog_no_sauce(shortlog, sauce):
     '''Return a Git shortlog without a 'sauce tag'.
 
