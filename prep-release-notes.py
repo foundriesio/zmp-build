@@ -85,19 +85,19 @@ def main():
             }
 
     print('''\
-# Zephyr
+## Zephyr
 
 {}
 
-# MCUboot
+## MCUboot
 
 {}
 
-# dm-hawkbit-mqtt
+## dm-hawkbit-mqtt
 
 {}
 
-# dm-lwm2m
+## dm-lwm2m
 
 {}
 '''.format(*[notes_metadata[p]['changes'] for p in projects]))
