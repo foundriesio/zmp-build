@@ -93,11 +93,11 @@ def main():
 
 {}
 
-## dm-hawkbit-mqtt
+## dm-lwm2m
 
 {}
 
-## dm-lwm2m
+## dm-hawkbit-mqtt
 
 {}
 '''.format(*[notes_metadata[p]['changes'] for p in projects]))
